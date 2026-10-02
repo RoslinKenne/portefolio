@@ -1,303 +1,676 @@
+<?php
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
+require __DIR__ . '/contact_mail.php';
+$requestPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
+if (!str_ends_with($requestPath, '/') && basename($requestPath) !== 'index.php') {
+    http_response_code(404); exit;
+}
+session_start(['cookie_httponly' => true, 'cookie_samesite' => 'Lax', 'cookie_secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off']);
+$_SESSION['csrf'] ??= bin2hex(random_bytes(32));
+$success = '';
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    $field = static fn($key) => is_string($_POST[$key] ?? null) ? trim($_POST[$key]) : '';
+    $name = $field('name'); $email = $field('email'); $message = $field('message');
+    $token = $field('csrf');
+    $smtpUser = getenv('SMTP_USERNAME') ?: '';
+    $smtpPassword = getenv('SMTP_PASSWORD') ?: '';
+    if (!hash_equals($_SESSION['csrf'], $token)) {
+        http_response_code(400);
+        $success = "Le formulaire a expiré. Rechargez la page et réessayez.";
+    } elseif ($name === '' || strlen($name) > 200 || preg_match('/[\r\n]/', $name)
+        || !filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($email) > 254
+        || $message === '' || strlen($message) > 10000) {
+        http_response_code(400);
+        $success = "Veuillez renseigner un nom, une adresse email valide et un message (10 000 caractères maximum).";
+    } elseif (time() - ($_SESSION['last_sent'] ?? 0) < 60) {
+        http_response_code(429);
+        $success = "Merci de patienter une minute avant un nouvel envoi.";
+    } elseif (!filter_var($smtpUser, FILTER_VALIDATE_EMAIL) || $smtpPassword === '') {
+        http_response_code(503);
+        $success = "Le formulaire est temporairement indisponible. Contactez-moi directement par email.";
+    } else {
+        try {
+            sendContact($name, $email, $message, $smtpUser, $smtpPassword);
+            $_SESSION['last_sent'] = time(); $_SESSION['csrf'] = bin2hex(random_bytes(32));
+            $success = "Message envoyé avec succès !";
+        } catch (Exception $e) {
+            http_response_code(502);
+            $success = "Impossible d'envoyer le message. Réessayez plus tard ou contactez-moi par email.";
+        }
+    }
+}
+?>
 <!DOCTYPE html>
-<html lang="fr">
+<html class="dark" lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Portfolio - Zoyem Roslin KENNE</title>
+
+    <meta property="og:title" content="Zoyem Roslin Kenne - Portfolio Cybersécurité & Dév">
+    <meta property="og:description" content="Étudiant à l'UQTR spécialisé en Cyber Sécurité, Cloud et Développement. Découvrez mes projets et mon parcours.">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&w=1200&q=80">
+
+    <title>Zoyem Roslin Kenne - Portfolio</title>
+
+    <link rel="stylesheet" href="styles.css">
+
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&display=swap" rel="stylesheet"/>
+
+
     <style>
-        body {
-            font-family: 'Segoe UI', sans-serif;
-            margin: 0;
-            padding: 0;
-            background-color: #eef2f3;
-            color: #2c3e50;
+        html { scroll-behavior: smooth; }
+        body { background-color: #0B0F19; color: #F3F4F6; }
+
+        /* Texture de fond */
+        .bg-grid {
+            background-size: 40px 40px;
+            background-image: linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                              linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
         }
-        header {
-            background: linear-gradient(90deg, #3498db, #2c3e50);
-            color: white;
-            padding: 1.5rem;
-            text-align: center;
-        }
-        nav {
-            background-color: #2c3e50;
-            padding: 1rem;
-        }
-        nav ul {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-            display: flex;
-            justify-content: center;
-        }
-        nav ul li {
-            margin: 0 20px;
-        }
-        nav ul li a {
-            color: white;
-            text-decoration: none;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        nav ul li a:hover {
-            color: #3498db;
-        }
-        .content {
-            max-width: 900px;
-            margin: 20px auto;
-            padding: 20px;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            margin-bottom: 60px;
-        }
-        .section {
-            display: none;
-        }
-        .section.active {
-            display: block;
-        }
-        h2 {
-            color: #3498db;
-            margin-bottom: 15px;
-        }
-        h3 {
-            color: #2c3e50;
-            margin-top: 20px;
-        }
-        ul {
-            padding-left: 20px;
-        }
-        .skills-list, .projects-list {
-            list-style: none;
-            padding: 0;
-        }
-        .skills-list li, .projects-list li {
-            background: #ecf0f1;
-            margin: 5px 0;
-            padding: 10px;
-            border-radius: 3px;
-        }
-        .git-link {
-            color: #3498db;
-            text-decoration: none;
-            font-weight: bold;
-        }
-        .git-link:hover {
-            text-decoration: underline;
-        }
-        form input, form textarea {
-            width: 100%;
-            padding: 10px;
-            margin: 10px 0;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            box-sizing: border-box;
-        }
-        form button {
-            background-color: #2c3e50;
-            color: white;
-            padding: 10px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        form button:hover {
-            background-color: #3498db;
-        }
-        footer {
-            text-align: center;
-            padding: 1rem;
-            background-color: #2c3e50;
-            color: white;
+
+        /* Effet de lueur */
+        .glow-effect {
             position: fixed;
-            bottom: 0;
-            width: 100%;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: radial-gradient(circle at 50% 0%, rgba(59, 130, 246, 0.15) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
         }
+
+        .material-symbols-outlined { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; vertical-align: middle; }
+
+        /* Animations Fade-in */
+        .fade-in-up { opacity: 1; transform: none; transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1); }
+        .animate-entry { opacity: 0; transform: translateY(20px); }
+        .visible { opacity: 1; transform: translateY(0); }
+        @media (prefers-reduced-motion: reduce) {
+            html { scroll-behavior: auto; }
+            *, *::before, *::after { animation: none !important; transition: none !important; }
+            .animate-entry { opacity: 1; transform: none; }
+        }
+
+        /* Curseur machine à écrire */
+        .cursor-blink { animation: blink 1s step-end infinite; }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0B0F19; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #3B82F6; }
     </style>
 </head>
-<body>
-    <?php
-    // Inclure PHPMailer
-    require 'PHPMailer/src/PHPMailer.php';
-    require 'PHPMailer/src/SMTP.php';
-    require 'PHPMailer/src/Exception.php';
 
-    use PHPMailer\PHPMailer\PHPMailer;
-    use PHPMailer\PHPMailer\Exception;
+<body class="font-display overflow-x-hidden bg-grid">
 
-    $success = '';
-    if ($_SERVER["REQUEST_METHOD"] == "POST") {
-        $name = htmlspecialchars($_POST['name']);
-        $email = htmlspecialchars($_POST['email']);
-        $message = htmlspecialchars($_POST['message']);
-        $to = "zoyem.roslin.kenne@uqtr.ca";
-        $subject = "Nouveau message de $name";
-        $body = "Nom: $name\nEmail: $email\nMessage: $message";
+    <div class="glow-effect"></div>
 
-        $mail = new PHPMailer(true);
-        try {
-            // Configuration SMTP pour Gmail
-            $mail->isSMTP();
-            $mail->Host = 'smtp.gmail.com';
-            $mail->SMTPAuth = true;
-            $mail->Username = 'kenneroslin5@gmail.com';
-            $mail->Password = 'welxwkyvcwyiayod
-'; // Remplacez par votre mot de passe d'application
-            $mail->SMTPSecure = 'tls';
-            $mail->Port = 587;
+    <div class="relative z-10 flex h-auto min-h-screen w-full flex-col">
 
-            // Expéditeur et destinataire
-            $mail->setFrom($email, $name);
-            $mail->addAddress($to);
+        <header class="sticky top-0 z-50 border-b border-white/5 bg-bg-dark/80 backdrop-blur-xl transition-all duration-300">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex h-16 items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/20 text-primary ring-1 ring-primary/50">
+                            <span class="material-symbols-outlined">◇</span>
+                        </div>
+                        <span class="text-lg font-bold tracking-tight text-white">Zoyem R.K.</span>
+                    </div>
 
-            // Contenu de l'email
-            $mail->isHTML(false);
-            $mail->Subject = $subject;
-            $mail->Body = $body;
+                    <nav aria-label="Navigation principale" class="hidden md:flex items-center gap-8">
+                        <a class="nav-link text-sm font-medium text-text-muted hover:text-primary transition-colors" href="#hero">Accueil</a>
+                        <a class="nav-link text-sm font-medium text-text-muted hover:text-primary transition-colors" href="#about">À Propos</a>
+                        <a class="nav-link text-sm font-medium text-text-muted hover:text-primary transition-colors" href="#skills">Compétences</a>
+                        <a class="nav-link text-sm font-medium text-text-muted hover:text-primary transition-colors" href="#education">Formation</a>
+                        <a class="nav-link text-sm font-medium text-text-muted hover:text-primary transition-colors" href="#projects">Projets</a>
+                        <a href="#contact" class="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-primary/25 hover:bg-blue-600 transition-all hover:scale-105">
+                            Contact
+                        </a>
+                    </nav>
 
-            // Envoyer l'email
-            $mail->send();
-            $success = "Message envoyé avec succès !";
-        } catch (Exception $e) {
-            $success = "Erreur lors de l'envoi : " . $mail->ErrorInfo;
-        }
-    }
-    ?>
+                    <button id="menuToggle" type="button" aria-label="Ouvrir le menu" aria-controls="mobileNav" aria-expanded="false" class="md:hidden text-white">
+                        <span class="material-symbols-outlined">☰</span>
+                    </button>
+                </div>
+            </div>
+            <nav id="mobileNav" aria-label="Navigation mobile" class="md:hidden border-t border-white/10 px-4 py-4" hidden>
+                <div class="flex flex-col gap-4">
+                    <a href="#hero">Accueil</a>
+                    <a href="#about">À propos</a>
+                    <a href="#skills">Compétences</a>
+                    <a href="#education">Formation</a>
+                    <a href="#projects">Projets</a>
+                    <a href="#contact">Contact</a>
+                </div>
+            </nav>
+            <noscript><nav aria-label="Navigation mobile sans JavaScript" class="md:hidden px-4 py-4 flex flex-wrap gap-4"><a href="#about">À propos</a><a href="#skills">Compétences</a><a href="#education">Formation</a><a href="#projects">Projets</a><a href="#contact">Contact</a></nav></noscript>
+        </header>
 
-    <header>
-        <h1>Zoyem Roslin KENNE</h1>
-        <p>Expert en Cybersécurité et Programmation</p>
-    </header>
+        <main class="flex-grow">
 
-    <nav>
-        <ul>
-            <li><a data-section="about">À Propos</a></li>
-            <li><a data-section="experience">Expérience</a></li>
-            <li><a data-section="skills">Compétences</a></li>
-            <li><a data-section="education">Formation</a></li>
-            <li><a data-section="contact">Contact</a></li>
-        </ul>
-    </nav>
+            <section id="hero" class="relative py-24 sm:py-32 lg:py-40 px-4 text-center">
+                <div class="mx-auto max-w-5xl">
+                    <div class="fade-in-up mx-auto mb-6 flex max-w-fit items-center justify-center space-x-2 overflow-hidden rounded-full border border-white/10 bg-white/5 px-4 py-1.5 backdrop-blur">
+                        <span class="relative flex h-2 w-2">
+                          <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75"></span>
+                          <span class="relative inline-flex h-2 w-2 rounded-full bg-green-500"></span>
+                        </span>
+                        <p class="text-xs font-medium text-white">Ouvert aux opportunités en cybersécurité et infonuagique</p>
+                    </div>
 
-    <div class="content">
-        <!-- Section À Propos -->
-        <div id="about" class="section active">
-            <h2>À Propos de Moi</h2>
-            <p>Je suis Zoyem Roslin Kenne, un étudiant en informatique à l’Université de Trois-Rivières, passionné par la cybersécurité et le développement logiciel. Originaire de Bafoussam, au Cameroun, j’ai débuté mon parcours avec un Baccalauréat des Sciences Appliquées, suivi d’un Diplôme en Maintenance Informatique, avant de m’installer au Canada pour approfondir mes compétences.</p>
-            <p>Mon expertise couvre plusieurs langages de programmation, dont Python, Java, C#, PHP, et JavaScript, ainsi que des frameworks comme React, Node.js et Angular. En cybersécurité, je me spécialise dans l’analyse des vulnérabilités, la protection des données et la sécurisation des infrastructures, avec une maîtrise d’outils comme Wireshark, Metasploit et Nmap.</p>
-            <p>Mon objectif est de contribuer à un monde numérique plus sûr en développant des solutions robustes et en restant à la pointe des nouvelles technologies. En dehors de mes études, j’aime relever des défis comme les compétitions CTF, explorer des projets personnels en programmation, et m’impliquer dans des initiatives universitaires qui favorisent l’innovation.</p>
-        </div>
+                    <h1 class="fade-in-up text-4xl font-black tracking-tight text-white sm:text-6xl md:text-7xl lg:text-8xl mb-6">
+                        Zoyem Roslin Kenne <br>
+                        <span class="text-transparent bg-clip-text bg-gradient-to-r from-primary to-secondary" id="typewriter">Passionné de cybersécurité</span><span class="text-primary cursor-blink">|</span>
+                    </h1>
 
-        <!-- Section Expérience -->
-        <div id="experience" class="section">
-            <h2>Expérience</h2>
-            <h3>Préposé à la plonge - Chartwell le duplexis, Trois-Rivières | Depuis 2023</h3>
-            <p>Rôle consistant à assister dans les tâches de cuisine, démontrant une capacité d’adaptation et de travail en équipe.</p>
+                    <p class="fade-in-up mx-auto max-w-3xl text-lg text-text-muted mb-8 leading-relaxed">
+                        Étudiant en informatique à l'UQTR. Je combine une expertise en programmation (C#, Python, Java) avec des compétences avancées en défense d'infrastructure et infonuagique.
+                    </p>
 
-            <h3>Projets Académiques</h3>
-            <ul class="projects-list">
-                <li>
-                    <strong>Développement d’un jeu de cartes en C# (Année 2)</strong><br>
-                    Création d’un jeu de cartes interactif en C# avec une interface graphique développée à l’aide de Windows Forms. Implémentation des règles du jeu (ex. : gestion des tours, scores, victoire), gestion des événements utilisateur (clics, drag-and-drop), et affichage dynamique des cartes avec des animations simples. Projet réalisé dans le cadre d’un cours de programmation orientée objet.<br>
-                    <a href="https://github.com/RoslinKenne/tp1groupe48-inf1035-masterfinal1.git" target="_blank" class="git-link">Lien GitHub</a>
-                </li>
-                <li>
-                    <strong>Projet Game of Life en Python </strong><br>
-                    Implémentation de l’automate cellulaire "Game of Life" de Conway en Python. Utilisation de la bibliothèque Pygame pour une interface graphique permettant de visualiser l’évolution des cellules. Optimisation des algorithmes pour gérer des grilles volumineuses, avec des fonctionnalités comme la pause, le redimensionnement et la personnalisation des règles initiales. Projet en cours dans le cadre d’un cours sur les algorithmes avancés.<br>
-                    <a href="https://github.com/RoslinKenne/jeu-de-la-vie.git" target="_blank" class="git-link">Lien GitHub</a>
-                </li>
-                <li>
-                    <strong>Site web pour les loisirs universitaires (Université de Trois-Rivières)</strong><br>
-                    Développement d’un site web interactif en HTML, CSS, JavaScript et PHP pour promouvoir les événements et loisirs à l’Université de Trois-Rivières. Intégration d’une base de données MySQL pour stocker les informations sur les événements (dates, descriptions, inscriptions). Fonctionnalités incluant un calendrier dynamique, un formulaire d’inscription sécurisé et une interface responsive adaptée aux mobiles.<br>
-                    <a href="https://github.com/zoyem-kenne/university-leisure-website" target="_blank" class="git-link">Lien GitHub</a>
-                </li>
-                <li>
-                    <strong>Logiciel de location de bus (Projet académique)</strong><br>
-                    Conception d’un logiciel en C# pour gérer les réservations et la flotte de bus. Développement d’une interface utilisateur intuitive avec Windows Forms, intégrant un système de gestion des disponibilités, des horaires et des paiements. Implémentation d’un sérialiseur/désérialiseur JSON pour sauvegarder et charger les données localement. Projet incluant des tests unitaires pour valider la robustesse du système.<br>
-                    <a href="https://github.com/RoslinKenne/tp1g13-master.git" target="_blank" class="git-link">Lien GitHub</a>
-                </li>
-                <li>
-                    <strong>Serialiseur/Désérialiseur JSON en Python </strong><br>
-                    Développement d’un module permettant la conversion d’objets Python complexes en JSON et inversement. Implémentation de la gestion des types de données imbriqués, de la validation automatique des structures et de la gestion des erreurs pour éviter les incohérences, garantissant une sérialisation rapide et efficace. Projet réalisé dans le cadre d’un travail personnel pour améliorer la manipulation et l’échange de données entre applications.<br>
-                    <a href="https://github.com/RoslinKenne/tp2inf1035g48-master.git" target="_blank" class="git-link">Lien GitHub</a>
-                </li>
-            </ul>
-        </div>
+                    <div class="fade-in-up flex flex-col sm:flex-row items-center justify-center gap-4">
+                        <a href="#projects" class="w-full sm:w-auto rounded-xl bg-primary px-8 py-4 text-base font-bold text-white shadow-lg shadow-primary/25 hover:bg-blue-600 transition-all hover:-translate-y-1">
+                            Voir mes projets
+                        </a>
+                       <a href="CV_stage_cyber_infonuagique_ATS.pdf" download="CV_Zoyem_Roslin_Kenne.pdf" class="w-full sm:w-auto rounded-xl border border-white/10 bg-white/5 px-8 py-4 text-base font-bold text-white hover:bg-white/10 transition-all flex items-center justify-center gap-2">
+    <span class="material-symbols-outlined"></span> Télécharger mon CV
+</a>
+                    </div>
+                </div>
+            </section>
 
-        <!-- Section Compétences -->
-        <div id="skills" class="section">
-            <h2>Compétences</h2>
-            <ul class="skills-list">
-                <li>Langages de programmation (Python, Java, C, C#, HTML, CSS, PHP et JavaScript)</li>
-                <li>Excellente connaissance des produits Microsoft et Apple</li>
-                <li>Développement Web</li>
-                <li>Cyber sécurité et protection des données</li>
-                <li>Connaissance des normes de cyber sécurité (ISO 27001, RGPD)</li>
-                <li>Tests et exploitation de failles via OWASP et DVWA (SQL Injection, XSS, CSRF, etc.)</li>
-                <li>Vulnérabilités des protocoles et techniques d’attaque (MITM, spoofing, flooding, etc.)</li>
-                <li>Composantes informatiques outils de diagnostics de panne</li>
-                <li>Bonne connaissance de la méthodologie Agile</li>
-            </ul>
-        </div>
+            <section id="about" class="py-20 border-y border-white/5 bg-white/[0.02]">
+                <div class="mx-auto max-w-4xl px-4">
+                    <div class="mb-8 text-center">
+                        <h2 class="text-3xl font-bold tracking-tight text-white">À Propos de Moi</h2>
+                    </div>
+                    <div class="space-y-4 text-text-muted leading-relaxed text-center text-lg">
+                        <p>
+                            Je suis <strong>Zoyem Roslin Kenne</strong>, étudiant en informatique à l'Université du Québec à Trois-Rivières (UQTR).
+                        </p>
+                        <p>
+                            Mon expertise couvre plusieurs langages de programmation, dont <strong>Python, Java, C#, PHP, et JavaScript</strong>, ainsi que des frameworks comme React et Node.js. En cybersécurité, je me spécialise dans l'analyse des vulnérabilités, la protection des données et la sécurisation des infrastructures, avec une maîtrise d'outils comme <strong>Wireshark et Nmap</strong>.
+                        </p>
+                    </div>
+                </div>
+            </section>
 
-        <!-- Section Formation -->
-        <div id="education" class="section">
-            <h2>Formation</h2>
-            <p>
-                <strong>Baccalauréat en Informatique, spécialisation Cybersécurité</strong> - Université du Québec à Trois-Rivières (UQTR) | En cours (Début : 2022)<br>
-                Programme complet axé sur la sécurité des systèmes, les réseaux, et le développement logiciel. Compétences acquises :<br>
-                - <strong>Programmation orientée objet (C# / Java)</strong> : Étude des concepts fondamentaux (classes, héritage, polymorphisme, encapsulation), développement d’applications interactives et gestion de structures de données complexes.<br>
-                - <strong>Développement web et bases de données</strong> : Conception d’applications web avec HTML, CSS, JavaScript, PHP, et utilisation de bases de données relationnelles (MySQL, PostgreSQL) avec requêtes SQL avancées.<br>
-                - <strong>Sécurité informatique et cryptographie</strong> : Introduction au chiffrement symétrique/asymétrique, protocoles SSL/TLS, gestion des vulnérabilités et protection contre les attaques (SQL injection, XSS).<br>
-                - <strong>Administration et réseautique</strong> : Configuration des réseaux (TCP/IP, routage), sécurisation via pare-feu et VPN.<br>
-                - <strong>Développement logiciel et gestion de projet</strong> : Méthodes agiles (Scrum, Kanban), tests automatisés, et CI/CD.<br>
-                - <strong>Algorithmique et intelligence artificielle</strong> : Structures de données avancées, algorithmes de tri/recherche, initiation à l’apprentissage automatique avec Python.<br>
-                Projets académiques pratiques renforçant ces compétences techniques.
-            </p>
-            <p>
-                <strong>Diplôme de Qualification Professionnelle en Maintenance Informatique</strong> - CEDIC, Bafoussam, Cameroun | 2021<br>
-                Formation technique spécialisée dans la réparation, la maintenance et la configuration de matériel informatique. Acquisition de compétences en diagnostic de pannes, assemblage d’ordinateurs, et gestion des systèmes d’exploitation (Windows, Linux).
-            </p>
-            <p>
-                <strong>Baccalauréat des Sciences Appliquées</strong> - Lycée Bilingue De Gouache, Bafoussam, Cameroun | 2021<br>
-                Diplôme de fin d’études secondaires avec un accent sur les mathématiques, la physique et les sciences appliquées. Base solide pour mes études ultérieures en informatique et technologie.
-            </p>
-        </div>
+            <section id="skills" class="py-20 border-b border-white/5">
+                <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+                    <div class="mb-16 text-center">
+                        <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">Arsenal Technique</h2>
+                        <p class="mt-4 text-text-muted">Compétences techniques clés et outils maîtrisés.</p>
+                    </div>
 
-        <!-- Section Contact -->
-        <div id="contact" class="section">
-            <h2>Contactez-moi</h2>
-            <p>Téléphone : 438 836 1658</p>
-            <p>Email : zoyem.roslin.kenne@uqtr.ca</p>
-            <p>Localisation : Trois-Rivières</p>
-            <?php if (isset($success)) echo "<p style='color: " . ($success === "Message envoyé avec succès !" ? "green" : "red") . ";'>$success</p>"; ?>
-            <form method="POST">
-                <input type="text" name="name" placeholder="Votre nom" required>
-                <input type="email" name="email" placeholder="Votre email" required>
-                <textarea name="message" placeholder="Votre message" rows="5" required></textarea>
-                <button type="submit">Envoyer</button>
-            </form>
+                    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+                        <div class="fade-in-up group relative rounded-2xl border border-white/10 bg-bg-card p-6 hover:border-primary/50 transition-colors">
+                            <div class="mb-4 h-32 w-full overflow-hidden rounded-lg bg-blue-500/10">
+                                <img loading="lazy" decoding="async" src="assets/image-1.jpg" alt="Code Développement" class="h-full w-full object-cover">
+                            </div>
+                            <h3 class="text-lg font-bold text-white">Développement</h3>
+                            <p class="mt-2 text-sm text-text-muted">C#, Python, Java, React, Node.js, PHP, Git, VS Code, XML.</p>
+                        </div>
+
+                        <div class="fade-in-up group relative rounded-2xl border border-white/10 bg-bg-card p-6 hover:border-primary/50 transition-colors">
+                            <div class="mb-4 h-32 w-full overflow-hidden rounded-lg bg-red-500/10">
+                                <img loading="lazy" decoding="async" src="assets/image-2.jpg" alt="Cybersécurité Cadenas" class="h-full w-full object-cover">
+                            </div>
+                            <h3 class="text-lg font-bold text-white">Cyber Sécurité</h3>
+                            <p class="mt-2 text-sm text-text-muted">Durcissement Linux, Contrôle d'accès (MFA), Logs, OWASP.</p>
+                        </div>
+
+                        <div class="fade-in-up group relative rounded-2xl border border-white/10 bg-bg-card p-6 hover:border-primary/50 transition-colors">
+                            <div class="mb-4 h-32 w-full overflow-hidden rounded-lg bg-green-500/10">
+                                <img loading="lazy" decoding="async" src="assets/image-3.jpg" alt="Data Center Serveurs" class="h-full w-full object-cover">
+                            </div>
+                            <h3 class="text-lg font-bold text-white">Infonuagique</h3>
+                            <p class="mt-2 text-sm text-text-muted">AWS, Azure, GCP, Docker, Virtualisation (VM).</p>
+                        </div>
+
+                        <div class="fade-in-up group relative rounded-2xl border border-white/10 bg-bg-card p-6 hover:border-primary/50 transition-colors">
+                            <div class="mb-4 h-32 w-full overflow-hidden rounded-lg bg-purple-500/10">
+                                <img loading="lazy" decoding="async" src="assets/image-4.jpg" alt="Câbles Réseau" class="h-full w-full object-cover">
+                            </div>
+                            <h3 class="text-lg font-bold text-white">Réseaux</h3>
+                            <p class="mt-2 text-sm text-text-muted">TCP/IP, DNS, VPN, Pare-feu, Analyse Wireshark.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+<section id="education" class="py-20 px-4 bg-white/[0.02]">
+                <div class="mx-auto max-w-4xl">
+                    <h2 class="text-3xl font-bold tracking-tight text-white mb-12 text-center">Ma Formation Académique</h2>
+
+                    <div class="space-y-8">
+                        <div class="fade-in-up relative flex gap-6">
+                            <div class="absolute left-[19px] top-10 bottom-[-40px] w-0.5 bg-white/10"></div>
+                            <div class="relative z-10 flex h-10 w-10 flex-none items-center justify-center rounded-full bg-bg-card border border-primary text-primary">
+                                <span class="material-symbols-outlined text-sm">🎓</span>
+                            </div>
+                            <div class="flex-auto rounded-2xl border border-white/10 bg-bg-card p-6 hover:border-white/20 transition-colors">
+                                <div class="flex flex-wrap justify-between gap-2 mb-2">
+                                    <h3 class="text-lg font-bold text-white">Baccalauréat en Informatique</h3>
+                                    <span class="text-sm font-medium text-primary bg-primary/10 px-2 py-0.5 rounded">En cours</span>
+                                </div>
+                                <p class="text-text-muted mb-2">Université du Québec à Trois-Rivières (UQTR)</p>
+                                <p class="text-sm text-text-muted">Cours pertinents : Réseaux informatiques, Systèmes d'exploitation, Sécurité informatique, Virtualisation / Cloud.</p>
+                            </div>
+                        </div>
+
+                        <div class="fade-in-up relative flex gap-6">
+                            <div class="absolute left-[19px] top-10 bottom-[-40px] w-0.5 bg-white/10"></div>
+                            <div class="relative z-10 flex h-10 w-10 flex-none items-center justify-center rounded-full bg-bg-card border border-secondary text-secondary">
+                                <span class="material-symbols-outlined text-sm">⚙</span>
+                            </div>
+                            <div class="flex-auto rounded-2xl border border-white/10 bg-bg-card p-6 hover:border-white/20 transition-colors">
+                                <div class="flex flex-wrap justify-between gap-2 mb-2">
+                                    <h3 class="text-lg font-bold text-white">Diplôme en Maintenance Informatique</h3>
+                                    <span class="text-sm font-medium text-secondary bg-secondary/10 px-2 py-0.5 rounded">2021</span>
+                                </div>
+                                <p class="text-text-muted mb-2">CEDIC, Bafoussam, Cameroun</p>
+                                <p class="text-sm text-text-muted">Diagnostic de pannes, assemblage d'ordinateurs, installation Windows/Linux.</p>
+                            </div>
+                        </div>
+
+                        <div class="fade-in-up relative flex gap-6">
+                            <div class="relative z-10 flex h-10 w-10 flex-none items-center justify-center rounded-full bg-bg-card border border-white/20 text-text-muted">
+                                <span class="material-symbols-outlined text-sm">🎓</span>
+                            </div>
+                            <div class="flex-auto rounded-2xl border border-white/10 bg-bg-card p-6 hover:border-white/20 transition-colors">
+                                <h3 class="text-lg font-bold text-white">Baccalauréat des Sciences Appliquées</h3>
+                                <p class="text-text-muted mb-2">2021 | Lycée Bilingue De Gouache, Cameroun</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+  <section id="certifications" class="py-20 px-4 border-t border-white/5 bg-white/[0.02]">
+    <div class="mx-auto max-w-7xl">
+        <h2 class="text-3xl font-bold tracking-tight text-white mb-12 text-center">Certifications & Veille</h2>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+            <div class="fade-in-up group relative rounded-2xl border border-green-500/30 bg-bg-card p-6 hover:border-green-500 hover:shadow-[0_0_20px_rgba(34,197,94,0.1)] transition-all">
+                <div class="absolute top-6 right-6 z-10">
+                    <span class="inline-flex items-center rounded-full bg-green-500/90 px-2 py-1 text-xs font-bold text-white ring-1 ring-inset ring-green-500/20 backdrop-blur-md">COMPLÉTÉ</span>
+                </div>
+                <div class="mb-4 h-32 w-full overflow-hidden rounded-lg bg-green-500/10">
+                    <img loading="lazy" decoding="async" src="assets/image-5.jpg" alt="Cybersécurité Shield" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all duration-500">
+                </div>
+                <h3 class="text-xl font-bold text-white">Google Cybersecurity Professional</h3>
+                <p class="mt-1 text-sm text-primary">Google Career Certificates</p>
+                <p class="mt-3 text-sm text-text-muted">Maîtrise des outils de sécurité (Linux, SQL, Python), détection d'intrusions et réponse aux incidents selon les standards du NIST.</p>
+            </div>
+
+            <div class="fade-in-up group relative rounded-2xl border border-blue-500/30 bg-bg-card p-6 hover:border-blue-500 hover:shadow-[0_0_20px_rgba(59,130,246,0.1)] transition-all">
+                <div class="absolute top-6 right-6 z-10">
+                    <span class="inline-flex items-center rounded-full bg-blue-500/90 px-2 py-1 text-xs font-bold text-white ring-1 ring-inset ring-blue-500/20 backdrop-blur-md">COMPLÉTÉ</span>
+                </div>
+                <div class="mb-4 h-32 w-full overflow-hidden rounded-lg bg-blue-500/10">
+                    <img loading="lazy" decoding="async" src="assets/image-6.jpg" alt="IT Support Hardware" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all duration-500">
+                </div>
+                <h3 class="text-xl font-bold text-white">Google IT Support Professional</h3>
+                <p class="mt-1 text-sm text-primary">Google Career Certificates</p>
+                <p class="mt-3 text-sm text-text-muted">Fondamentaux du support technique, réseaux informatiques, dépannage matériel et administration système.</p>
+            </div>
+
+            <div class="fade-in-up group relative rounded-2xl border border-yellow-500/30 bg-bg-card p-6 hover:border-yellow-500 hover:shadow-[0_0_20px_rgba(234,179,8,0.1)] transition-all">
+                <div class="absolute top-6 right-6 z-10">
+                    <span class="inline-flex items-center rounded-full bg-yellow-500/90 px-2 py-1 text-xs font-bold text-white ring-1 ring-inset ring-yellow-500/20 animate-pulse backdrop-blur-md">EN COURS</span>
+                </div>
+                <div class="mb-4 h-32 w-full overflow-hidden rounded-lg bg-yellow-500/10">
+                    <img loading="lazy" decoding="async" src="assets/image-7.jpg" alt="Security Lock Digital" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all duration-500">
+                </div>
+                <h3 class="text-xl font-bold text-white">CompTIA Security+</h3>
+                <p class="mt-1 text-sm text-primary">CompTIA</p>
+                <p class="mt-3 text-sm text-text-muted">Certification de référence validant les compétences fondamentales en cybersécurité, gestion des risques et cryptographie.</p>
+            </div>
+
+            <div class="fade-in-up group relative rounded-2xl border border-purple-500/30 bg-bg-card p-6 hover:border-purple-500 hover:shadow-[0_0_20px_rgba(168,85,247,0.1)] transition-all">
+                <div class="absolute top-6 right-6 z-10">
+                    <span class="inline-flex items-center rounded-full bg-purple-500/90 px-2 py-1 text-xs font-bold text-white ring-1 ring-inset ring-purple-500/20 backdrop-blur-md">CONTINU</span>
+                </div>
+                <div class="mb-4 h-32 w-full overflow-hidden rounded-lg bg-purple-500/10">
+                    <img loading="lazy" decoding="async" src="assets/image-8.jpg" alt="Technology News Feed" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 group-hover:scale-105 transition-all duration-500">
+                </div>
+                <h3 class="text-xl font-bold text-white">Veille Technologique Active</h3>
+                <p class="mt-1 text-sm text-primary">Auto-formation</p>
+                <p class="mt-3 text-sm text-text-muted">Suivi quotidien des vulnérabilités (CVE), exploration de nouveaux outils de détection (EDR/XDR) et pratique sur laboratoires virtuels.</p>
+            </div>
+
         </div>
     </div>
+</section>
 
-    <footer>
-        <p>© 2025 Zoyem Roslin KENNE</p>
-    </footer>
+
+
+            <section id="projects" class="py-20 px-4 sm:px-6 lg:px-8 border-t border-white/5 bg-white/[0.02]">
+                <div class="mx-auto max-w-7xl">
+                    <h2 class="text-3xl font-bold tracking-tight text-white mb-12 text-center">Projets Réalisés</h2>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+
+                        <div class="fade-in-up group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-bg-card transition-all hover:-translate-y-2 hover:border-primary/50 hover:shadow-2xl hover:shadow-primary/10">
+                            <div class="relative h-48 w-full overflow-hidden bg-bg-dark border-b border-white/5">
+                                <img loading="lazy" decoding="async" src="assets/image-9.jpg" alt="Code Web" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-500">
+                            </div>
+                            <div class="p-6">
+                                <h3 class="text-xl font-bold text-white group-hover:text-primary">App Web Gestion Décodeur</h3>
+                                <p class="mt-2 text-sm text-text-muted">Gestion complète de décodeurs TV. Backend C#, API Node.js et Frontend React.</p>
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    <span class="rounded-full bg-blue-500/10 px-2 py-1 text-xs text-blue-400">C#</span>
+                                    <span class="rounded-full bg-green-500/10 px-2 py-1 text-xs text-green-400">Node.js</span>
+                                    <span class="rounded-full bg-cyan-500/10 px-2 py-1 text-xs text-cyan-400">React</span>
+                                </div>
+                                <a href="https://github.com/RoslinKenne" target="_blank" rel="noopener noreferrer" class="block mt-4 text-sm font-bold text-primary hover:underline">Profil GitHub</a>
+                            </div>
+                        </div>
+
+                        <div class="fade-in-up group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-bg-card transition-all hover:-translate-y-2 hover:border-primary/50 hover:shadow-2xl hover:shadow-primary/10">
+                            <div class="relative h-48 w-full overflow-hidden bg-bg-dark border-b border-white/5">
+                                <img loading="lazy" decoding="async" src="assets/image-10.jpg" alt="Sockets" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-500">
+                            </div>
+                            <div class="p-6">
+                                <h3 class="text-xl font-bold text-white group-hover:text-primary">App Client/Serveur Socket</h3>
+                                <p class="mt-2 text-sm text-text-muted">Communication temps réel bi-directionnelle entre appareils via sockets TCP/IP en C#.</p>
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    <span class="rounded-full bg-indigo-500/10 px-2 py-1 text-xs text-indigo-400">C#</span>
+                                    <span class="rounded-full bg-indigo-500/10 px-2 py-1 text-xs text-indigo-400">Sockets</span>
+                                </div>
+                                <a href="https://github.com/RoslinKenne/inf1010tp1-master-1-" target="_blank" rel="noopener noreferrer" class="block mt-4 text-sm font-bold text-primary hover:underline">Voir le code</a>
+                            </div>
+                        </div>
+
+                        <div class="fade-in-up group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-bg-card transition-all hover:-translate-y-2 hover:border-primary/50 hover:shadow-2xl hover:shadow-primary/10">
+                            <div class="relative h-48 w-full overflow-hidden bg-bg-dark border-b border-white/5">
+                                <img loading="lazy" decoding="async" src="assets/image-11.jpg" alt="Java RMI" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-500">
+                            </div>
+                            <div class="p-6">
+                                <h3 class="text-xl font-bold text-white group-hover:text-primary">Connexion RMI Java & XML</h3>
+                                <p class="mt-2 text-sm text-text-muted">Architecture distribuée utilisant Remote Method Invocation (RMI) et interface XML.</p>
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    <span class="rounded-full bg-orange-500/10 px-2 py-1 text-xs text-orange-400">Java</span>
+                                    <span class="rounded-full bg-orange-500/10 px-2 py-1 text-xs text-orange-400">RMI</span>
+                                    <span class="rounded-full bg-orange-500/10 px-2 py-1 text-xs text-orange-400">XML</span>
+                                </div>
+                                <a href="https://github.com/RoslinKenne" target="_blank" rel="noopener noreferrer" class="block mt-4 text-sm font-bold text-primary hover:underline">Profil GitHub</a>
+                            </div>
+                        </div>
+
+                        <div class="fade-in-up group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-bg-card transition-all hover:-translate-y-2 hover:border-primary/50 hover:shadow-2xl hover:shadow-primary/10">
+                            <div class="relative h-48 w-full overflow-hidden bg-bg-dark border-b border-white/5">
+                                <img loading="lazy" decoding="async" src="assets/image-12.jpg" alt="Logique" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-500">
+                            </div>
+                            <div class="p-6">
+                                <h3 class="text-xl font-bold text-white group-hover:text-primary">Validateur d'Automates</h3>
+                                <p class="mt-2 text-sm text-text-muted">Programme C# pour charger et valider des chaînes via des automates finis déterministes.</p>
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    <span class="rounded-full bg-blue-500/10 px-2 py-1 text-xs text-blue-400">C#</span>
+                                    <span class="rounded-full bg-blue-500/10 px-2 py-1 text-xs text-blue-400">Algorithmes</span>
+                                </div>
+                                <a href="https://github.com/RoslinKenne/tp1-master-1-" target="_blank" rel="noopener noreferrer" class="block mt-4 text-sm font-bold text-primary hover:underline">Voir le code</a>
+                            </div>
+                        </div>
+
+                        <div class="fade-in-up group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-bg-card transition-all hover:-translate-y-2 hover:border-primary/50 hover:shadow-2xl hover:shadow-primary/10">
+                            <div class="relative h-48 w-full overflow-hidden bg-bg-dark border-b border-white/5">
+                                <img loading="lazy" decoding="async" src="assets/image-13.jpg" alt="Cyber" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-500">
+                            </div>
+                            <div class="p-6">
+                                <h3 class="text-xl font-bold text-white group-hover:text-primary">Labo Hardening Linux</h3>
+                                <p class="mt-2 text-sm text-text-muted">Sécurisation d'une VM : SSH, Pare-feu, Gestion utilisateurs.</p>
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    <span class="rounded-full bg-red-500/10 px-2 py-1 text-xs text-red-400">Linux</span>
+                                    <span class="rounded-full bg-red-500/10 px-2 py-1 text-xs text-red-400">Security</span>
+                                </div>
+                                <a href="https://github.com/RoslinKenne" target="_blank" rel="noopener noreferrer" class="block mt-4 text-sm font-bold text-primary hover:underline">Profil GitHub</a>
+                            </div>
+                        </div>
+
+                        <div class="fade-in-up group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-bg-card transition-all hover:-translate-y-2 hover:border-primary/50 hover:shadow-2xl hover:shadow-primary/10">
+                            <div class="relative h-48 w-full overflow-hidden bg-bg-dark border-b border-white/5">
+                                <img loading="lazy" decoding="async" src="assets/image-14.jpg" alt="Wireshark" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-500">
+                            </div>
+                            <div class="p-6">
+                                <h3 class="text-xl font-bold text-white group-hover:text-primary">Analyse Trafic Wireshark</h3>
+                                <p class="mt-2 text-sm text-text-muted">Capture de paquets et analyse forensique de trafic réseau suspect.</p>
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    <span class="rounded-full bg-purple-500/10 px-2 py-1 text-xs text-purple-400">Wireshark</span>
+                                </div>
+                                <a href="https://github.com/RoslinKenne" target="_blank" rel="noopener noreferrer" class="block mt-4 text-sm font-bold text-primary hover:underline">Profil GitHub</a>
+                            </div>
+                        </div>
+
+                        <div class="fade-in-up group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-bg-card transition-all hover:-translate-y-2 hover:border-primary/50 hover:shadow-2xl hover:shadow-primary/10">
+                            <div class="relative h-48 w-full overflow-hidden bg-bg-dark border-b border-white/5">
+                                <img loading="lazy" decoding="async" src="assets/image-15.jpg" alt="Cloud" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-500">
+                            </div>
+                            <div class="p-6">
+                                <h3 class="text-xl font-bold text-white group-hover:text-primary">Déploiement Cloud</h3>
+                                <p class="mt-2 text-sm text-text-muted">Déploiement sécurisé sur AWS/Azure avec Git.</p>
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    <span class="rounded-full bg-green-500/10 px-2 py-1 text-xs text-green-400">Cloud</span>
+                                    <span class="rounded-full bg-green-500/10 px-2 py-1 text-xs text-green-400">Git</span>
+                                </div>
+                                <a href="https://github.com/RoslinKenne" target="_blank" rel="noopener noreferrer" class="block mt-4 text-sm font-bold text-primary hover:underline">Profil GitHub</a>
+                            </div>
+                        </div>
+
+                        <div class="fade-in-up group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-bg-card transition-all hover:-translate-y-2 hover:border-primary/50 hover:shadow-2xl hover:shadow-primary/10">
+                            <div class="relative h-48 w-full overflow-hidden bg-bg-dark border-b border-white/5">
+                                <img loading="lazy" decoding="async" src="assets/image-16.jpg" alt="Jeu Cartes" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-500">
+                            </div>
+                            <div class="p-6">
+                                <h3 class="text-xl font-bold text-white group-hover:text-primary">Jeu de Cartes C#</h3>
+                                <p class="mt-2 text-sm text-text-muted">Jeu de pêche en console C# : gestion des joueurs, des cartes et des tours.</p>
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    <span class="rounded-full bg-blue-500/10 px-2 py-1 text-xs text-blue-400">C#</span>
+                                </div>
+                                <a href="https://github.com/RoslinKenne/tp1groupe48-inf1035-masterfinal1.git" target="_blank" rel="noopener noreferrer" class="block mt-4 text-sm font-bold text-primary hover:underline">Voir le code</a>
+                            </div>
+                        </div>
+
+                        <div class="fade-in-up group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-bg-card transition-all hover:-translate-y-2 hover:border-primary/50 hover:shadow-2xl hover:shadow-primary/10">
+                            <div class="relative h-48 w-full overflow-hidden bg-bg-dark border-b border-white/5">
+                                <img loading="lazy" decoding="async" src="assets/image-17.jpg" alt="AI Life" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-500">
+                            </div>
+                            <div class="p-6">
+                                <h3 class="text-xl font-bold text-white group-hover:text-primary">Game of Life (Python)</h3>
+                                <p class="mt-2 text-sm text-text-muted">Jeu de la vie avec NumPy et Matplotlib, en modes standard et neuronal avec scikit-learn.</p>
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    <span class="rounded-full bg-yellow-500/10 px-2 py-1 text-xs text-yellow-400">Python</span>
+                                </div>
+                                <a href="https://github.com/RoslinKenne/jeu-de-la-vie.git" target="_blank" rel="noopener noreferrer" class="block mt-4 text-sm font-bold text-primary hover:underline">Voir le code</a>
+                            </div>
+                        </div>
+
+                        <div class="fade-in-up group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-bg-card transition-all hover:-translate-y-2 hover:border-primary/50 hover:shadow-2xl hover:shadow-primary/10">
+                            <div class="relative h-48 w-full overflow-hidden bg-bg-dark border-b border-white/5">
+                                <img loading="lazy" decoding="async" src="assets/image-18.jpg" alt="Web PHP" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-500">
+                            </div>
+                            <div class="p-6">
+                                <h3 class="text-xl font-bold text-white group-hover:text-primary">Site Web Loisirs</h3>
+                                <p class="mt-2 text-sm text-text-muted">Site dynamique pour événements universitaires (PHP/MySQL).</p>
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    <span class="rounded-full bg-purple-500/10 px-2 py-1 text-xs text-purple-400">PHP</span>
+                                </div>
+                                <p class="mt-4 text-sm text-text-muted">Code source à publier</p>
+                            </div>
+                        </div>
+
+                        <div class="fade-in-up group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-bg-card transition-all hover:-translate-y-2 hover:border-primary/50 hover:shadow-2xl hover:shadow-primary/10">
+                            <div class="relative h-48 w-full overflow-hidden bg-bg-dark border-b border-white/5">
+                                <img loading="lazy" decoding="async" src="assets/image-19.jpg" alt="Bus" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-500">
+                            </div>
+                            <div class="p-6">
+                                <h3 class="text-xl font-bold text-white group-hover:text-primary">Logiciel Location Bus</h3>
+                                <p class="mt-2 text-sm text-text-muted">Application console Java pour gérer les bus, les chauffeurs et les trajets.</p>
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    <span class="rounded-full bg-blue-500/10 px-2 py-1 text-xs text-blue-400">Java</span>
+                                </div>
+                                <a href="https://github.com/RoslinKenne/tp1g13-master.git" target="_blank" rel="noopener noreferrer" class="block mt-4 text-sm font-bold text-primary hover:underline">Voir le code</a>
+                            </div>
+                        </div>
+
+                        <div class="fade-in-up group cursor-pointer overflow-hidden rounded-2xl border border-white/10 bg-bg-card transition-all hover:-translate-y-2 hover:border-primary/50 hover:shadow-2xl hover:shadow-primary/10">
+                            <div class="relative h-48 w-full overflow-hidden bg-bg-dark border-b border-white/5">
+                                <img loading="lazy" decoding="async" src="assets/image-20.jpg" alt="JSON Code" class="h-full w-full object-cover opacity-80 group-hover:opacity-100 transition-all duration-500">
+                            </div>
+                            <div class="p-6">
+                                <h3 class="text-xl font-bold text-white group-hover:text-primary">Sérialiseur JSON</h3>
+                                <p class="mt-2 text-sm text-text-muted">Sérialiseur et désérialiseur Java utilisant la réflexion et des annotations.</p>
+                                <div class="mt-4 flex flex-wrap gap-2">
+                                    <span class="rounded-full bg-yellow-500/10 px-2 py-1 text-xs text-yellow-400">Java</span>
+                                </div>
+                                <a href="https://github.com/RoslinKenne/tp2inf1035g48-master.git" target="_blank" rel="noopener noreferrer" class="block mt-4 text-sm font-bold text-primary hover:underline">Voir le code</a>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </section>
+
+            <section id="contact" class="relative py-24 px-4">
+                <div class="mx-auto max-w-3xl rounded-3xl border border-white/10 bg-bg-card p-8 sm:p-12 shadow-2xl">
+                    <div class="text-center mb-10">
+                        <h2 class="text-3xl font-bold text-white">Contactez-moi</h2>
+                        <p class="mt-4 text-text-muted">Prêt à discuter de nouvelles opportunités.</p>
+                    </div>
+
+                    <p class="mb-6 text-text-muted">Vous pouvez aussi écrire directement à <a class="text-primary underline" href="mailto:zoyem.roslin.kenne@uqtr.ca">zoyem.roslin.kenne@uqtr.ca</a>.</p>
+                    <?php if ($success !== ''): ?><p role="status" class="mb-6 text-text-main"><?= htmlspecialchars($success, ENT_QUOTES, 'UTF-8') ?></p><?php endif; ?>
+                    <form action="#contact" method="POST" class="space-y-6">
+                        <input type="hidden" name="csrf" value="<?= htmlspecialchars($_SESSION['csrf'], ENT_QUOTES, 'UTF-8') ?>">
+                        <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                            <div>
+                                <label for="contact-name" class="mb-2 block text-sm font-medium text-white">Nom</label>
+                                <input type="text" id="contact-name" name="name" class="w-full rounded-lg border border-white/10 bg-bg-dark p-3 text-white focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all" placeholder="Votre nom" required>
+                            </div>
+                            <div>
+                                <label for="contact-email" class="mb-2 block text-sm font-medium text-white">Email</label>
+                                <input type="email" id="contact-email" name="email" class="w-full rounded-lg border border-white/10 bg-bg-dark p-3 text-white focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all" placeholder="votre@email.com" required>
+                            </div>
+                        </div>
+                        <div>
+                            <label for="contact-message" class="mb-2 block text-sm font-medium text-white">Message</label>
+                            <textarea id="contact-message" name="message" rows="4" class="w-full rounded-lg border border-white/10 bg-bg-dark p-3 text-white focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all" placeholder="Votre message..." required></textarea>
+                        </div>
+                        <button type="submit" class="w-full rounded-lg bg-primary py-3.5 text-center font-bold text-white hover:bg-blue-600 transition-colors">
+                            Envoyer le message
+                        </button>
+                    </form>
+                </div>
+            </section>
+
+        </main>
+
+        <footer class="border-t border-white/10 bg-bg-dark py-12">
+            <div class="mx-auto max-w-7xl px-4 text-center">
+                <p class="text-sm text-text-muted">© 2026 Zoyem Roslin Kenne. Tous droits réservés.</p>
+            </div>
+        </footer>
+
+        <button aria-label="Retour en haut" type="button" id="backToTop" onclick="scrollToTop()" class="fixed bottom-8 right-8 z-50 rounded-full bg-primary p-3 text-white shadow-lg transition-all duration-300 opacity-0 translate-y-10 hover:bg-blue-600">
+            <span class="material-symbols-outlined">↑</span>
+        </button>
+    </div>
 
     <script>
-        // JavaScript pour gérer la navigation
-        const links = document.querySelectorAll('nav a');
-        const sections = document.querySelectorAll('.section');
-
-        links.forEach(link => {
-            link.addEventListener('click', function() {
-                sections.forEach(section => {
-                    section.classList.remove('active');
+        document.addEventListener("DOMContentLoaded", () => {
+            const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            const menuButton = document.getElementById('menuToggle');
+            const mobileNav = document.getElementById('mobileNav');
+            function closeMenu() {
+                mobileNav.hidden = true;
+                menuButton.setAttribute('aria-expanded', 'false');
+                menuButton.setAttribute('aria-label', 'Ouvrir le menu');
+            }
+            menuButton.addEventListener('click', () => {
+                const open = menuButton.getAttribute('aria-expanded') !== 'true';
+                mobileNav.hidden = !open;
+                menuButton.setAttribute('aria-expanded', String(open));
+                menuButton.setAttribute('aria-label', open ? 'Fermer le menu' : 'Ouvrir le menu');
+            });
+            mobileNav.querySelectorAll('a').forEach(link => link.addEventListener('click', closeMenu));
+            document.addEventListener('keydown', event => {
+                if (event.key === 'Escape' && !mobileNav.hidden) {
+                    closeMenu();
+                    menuButton.focus();
+                }
+            });
+            if (!reducedMotion && 'IntersectionObserver' in window) {
+                const observer = new IntersectionObserver(entries => {
+                    entries.forEach(entry => {
+                        if (entry.isIntersecting) {
+                            entry.target.classList.add('visible');
+                            observer.unobserve(entry.target);
+                        }
+                    });
+                }, { threshold: 0.1 });
+                document.querySelectorAll('.fade-in-up').forEach(el => {
+                    el.classList.add('animate-entry');
+                    observer.observe(el);
                 });
-                const sectionId = this.getAttribute('data-section');
-                document.getElementById(sectionId).classList.add('active');
+            }
+
+            // 2. Machine à écrire
+            const textElement = document.getElementById('typewriter');
+            const phrases = ["Futur Expert Cyber", "Développeur C#", "Analyste Réseau", "Passionné du Cloud"];
+            let phraseIndex = 0; let charIndex = 0; let isDeleting = false; let typeSpeed = 100;
+
+            function type() {
+                const currentPhrase = phrases[phraseIndex];
+                if (isDeleting) {
+                    textElement.textContent = currentPhrase.substring(0, charIndex - 1);
+                    charIndex--;
+                    typeSpeed = 50;
+                } else {
+                    textElement.textContent = currentPhrase.substring(0, charIndex + 1);
+                    charIndex++;
+                    typeSpeed = 100;
+                }
+                if (!isDeleting && charIndex === currentPhrase.length) {
+                    isDeleting = true; typeSpeed = 2000;
+                } else if (isDeleting && charIndex === 0) {
+                    isDeleting = false; phraseIndex = (phraseIndex + 1) % phrases.length; typeSpeed = 500;
+                }
+                setTimeout(type, typeSpeed);
+            }
+            if (textElement && !reducedMotion) type();
+
+            // 3. ScrollSpy & BackToTop
+            const sections = document.querySelectorAll("section");
+            const navLinks = document.querySelectorAll(".nav-link");
+            const backToTopBtn = document.getElementById("backToTop");
+
+            window.addEventListener("scroll", () => {
+                let current = "";
+                sections.forEach((section) => {
+                    const sectionTop = section.offsetTop;
+                    if (scrollY >= sectionTop - 150) {
+                        current = section.getAttribute("id");
+                    }
+                });
+                navLinks.forEach((link) => {
+                    link.classList.remove("text-primary");
+                    if (current && link.getAttribute("href") === "#" + current) {
+                        link.classList.add("text-primary");
+                    }
+                });
+
+                if (window.scrollY > 500) {
+                    backToTopBtn.classList.remove("opacity-0", "translate-y-10");
+                } else {
+                    backToTopBtn.classList.add("opacity-0", "translate-y-10");
+                }
             });
         });
+
+        function scrollToTop() {
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
     </script>
 </body>
 </html>
